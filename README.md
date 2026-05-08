@@ -4,7 +4,41 @@
 **«Тюнинг Cursor: как я укротил AI-ассистента и радикально снизил счета за токены с помощью MCP-серверов»**  
 → https://habr.com/ru/articles/1029868/
 
-Цель: **граф знаний монорепо** (Graph RAG MCP → Neo4j) и при необходимости **query fusion** — тот же MCP **`graph-rag`** с **`graph_rag_fused_code_search`** (**Ollama + Qdrant** в Docker), плюс **сжатие контекста** (lean-ctx), **прокси мета-инструментов** (mcp-on-demand). Отдельный **rag-code** MCP — опционально, если нужен второй векторный контур; см. **`skills/graph-rag/MCP.md`** для переменных **`QDRANT_URL`**, **`OLLAMA_BASE_URL`**, **`OLLAMA_EMBED`**, опционально **`GRAPH_RAG_FUSION_QDRANT_COLLECTION`** на процессе **`graph-rag`**.
+Цель: **граф знаний монорепо** (Graph RAG MCP → Neo4j) и при необходимости **query fusion** — тот же MCP **`graph-rag`** с **`graph_rag_fused_code_search`** (**Ollama + Qdrant** в Docker), плюс **сжатие контекста** (lean-ctx), **прокси мета-инструментов** (mcp-on-demand). Отдельный **rag-code** MCP — опционально, если нужен второй векторный контур.
+
+**Расширенная спека MCP (инструменты, поведение без Qdrant):** в клоне монорепо рядом с этим стеком — файл [`skills/graph-rag/MCP.md`](https://github.com/vvv-web/desktop-openclaw/blob/main/skills/graph-rag/MCP.md) (локально: `~/Desktop/skills/graph-rag/MCP.md` при корне воркспейса **Desktop**). Ниже — минимальный самодостаточный фрагмент для **`graph-rag`** + fusion.
+
+---
+
+## Graph RAG MCP и query fusion (`graph_rag_fused_code_search`)
+
+Сервер: **`python3`** → `skills/graph-rag/scripts/graph_rag_mcp_server.py` (stdio). Зависимости: `pip install -r skills/graph-rag/requirements-mcp.txt`. Секреты Neo4j: **`graph-rag-infra/.env.neo4j`** (или переменные окружения).
+
+### Переменные `env` для fusion на процессе **`graph-rag`**
+
+| Переменная | Обязательность | Назначение |
+|------------|----------------|------------|
+| **`GRAPH_RAG_WORKSPACE`** | да | Корень монорепо (индексация/пути). |
+| **`PYTHONPATH`** | да | Каталог `.../skills/graph-rag/scripts` (импорты сервера). |
+| **`QDRANT_URL`** | для fusion | HTTP API Qdrant, например `http://127.0.0.1:6333`. |
+| **`OLLAMA_BASE_URL`** | для fusion | HTTP API Ollama, например `http://127.0.0.1:11434`. |
+| **`OLLAMA_EMBED`** | для fusion | Имя модели эмбеддингов в Ollama (например `nomic-embed-text`). |
+| **`GRAPH_RAG_FUSION_QDRANT_COLLECTION`** | нет | Явное имя коллекции Qdrant; если не задано — авто-подбор (коллекция с подстрокой `ragcode`, предпочтительно `*python*`). |
+
+Без **`QDRANT_URL`** инструмент **`graph_rag_fused_code_search`** выполняет только этап Neo4j и подсказывает добавить переменные fusion.
+
+### Инструменты MCP **`graph-rag`** (сжатый список)
+
+| Инструмент | Назначение |
+|------------|------------|
+| `graph_rag_stats` | Статистика графа. |
+| `graph_rag_search_entities` | Поиск узлов по имени. |
+| `graph_rag_related` | Соседи по `entity_id` и hops. |
+| `graph_rag_context` | Общий контекст нескольких id. |
+| `graph_rag_retrieve` | Смарт-ретривал по запросу на естественном языке. |
+| **`graph_rag_fused_code_search`** | **Query fusion:** термины из графа подмешиваются к запросу → эмбеддинг Ollama → поиск в Qdrant. |
+
+После правки `~/.cursor/mcp.json` — **полный перезапуск Cursor**.
 
 ---
 

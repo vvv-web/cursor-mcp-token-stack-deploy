@@ -4,7 +4,7 @@
 **«Тюнинг Cursor: как я укротил AI-ассистента и радикально снизил счета за токены с помощью MCP-серверов»**  
 → https://habr.com/ru/articles/1029868/
 
-Цель: **семантический поиск по коду** (RagCode), **сжатие контекста** (lean-ctx), **прокси мета-инструментов** (mcp-on-demand), плюс инфраструктура **Ollama + Qdrant** в Docker.
+Цель: **граф знаний монорепо** (Graph RAG MCP → Neo4j) и при необходимости **query fusion** — тот же MCP **`graph-rag`** с **`graph_rag_fused_code_search`** (**Ollama + Qdrant** в Docker), плюс **сжатие контекста** (lean-ctx), **прокси мета-инструментов** (mcp-on-demand). Отдельный **rag-code** MCP — опционально, если нужен второй векторный контур; см. **`skills/graph-rag/MCP.md`** для переменных **`QDRANT_URL`**, **`OLLAMA_BASE_URL`**, **`OLLAMA_EMBED`**, опционально **`GRAPH_RAG_FUSION_QDRANT_COLLECTION`** на процессе **`graph-rag`**.
 
 ---
 
@@ -24,9 +24,10 @@
 
 | Компонент | Назначение |
 |-----------|------------|
-| **rag-code-mcp** | MCP-сервер: AST/векторный индекс, семантический `search_code`, локально (приватность). Стек: бинарь RagCode + **Ollama** (эмбеддинги и LLM) + **Qdrant**. |
+| **graph-rag** (путь по умолчанию) | MCP **stdio**: `graph_rag_mcp_server.py` — Neo4j (`graph_rag_retrieve`, сущности, multi-hop). Для кода по смыслу с подмешиванием терминов из графа: **`graph_rag_fused_code_search`** при **`QDRANT_URL`**, **`OLLAMA_BASE_URL`**, **`OLLAMA_EMBED`** в `env` сервера (опционально **`GRAPH_RAG_FUSION_QDRANT_COLLECTION`**). Секреты Neo4j: `graph-rag-infra/.env.neo4j`. Канон: **`skills/graph-rag/MCP.md`**. |
+| **rag-code-mcp** (опционально) | Отдельный векторный MCP `search_code`, если нужен контур без fusion. Тот же **Ollama + Qdrant**, что и для fusion на **`graph-rag`**. |
 | **lean-ctx** | Rust-бинарь: сжатие вывода терминала и кэшируемое чтение (`ctx_*` инструменты в Cursor). |
-| **mcp-on-demand** | npm-пакет `@soflution/mcp-on-demand`: прокси с двумя мета-инструментами, lazy-load остальных MCP. |
+| **mcp-on-demand** | npm-пакет `@soflution/mcp-on-demand`: прокси с двумя мета-инструментами, lazy-load остальных MCP (подключайте сюда же **graph-rag** и **lean-ctx** в конфиге on-demand, если используете мета-обёртку). |
 | **Ollama** | Контейнер `ollama`, порт **11434**. |
 | **Qdrant** | Контейнер **ragcode-qdrant** (из установки/окружения), порты **6333–6334**. |
 
@@ -49,20 +50,20 @@
    `~/.local/bin/rag-code-mcp` → фактический бинарь в каталоге загрузки.
 6. **Докачка модели** `phi3:medium` в контейнер Ollama:  
    `docker exec ollama ollama pull phi3:medium` (долго из‑за ~8 GB — нормально для одного большого слоя).
-7. **`~/.cursor/mcp.json`** — добавлены три сервера (без удаления существующих: serena, playwright, openclaw-gateway и т.д.):
+7. **`~/.cursor/mcp.json`** — добавлены серверы (без удаления существующих: serena, playwright, openclaw-gateway и т.д.):
 
-   - **`rag-code`**: `command` на `~/.local/bin/rag-code-mcp`, аргумент `-config` на абсолютный путь к `config.yaml`, `env`:  
-     `OLLAMA_BASE_URL`, `OLLAMA_EMBED`, `OLLAMA_MODEL`, `QDRANT_URL`.
+   - **`graph-rag`** (основной RAG + опционально fusion): `python3` на `Desktop/skills/graph-rag/scripts/graph_rag_mcp_server.py`, `env`: `GRAPH_RAG_WORKSPACE`, `PYTHONPATH` на `.../skills/graph-rag/scripts`, при необходимости **`QDRANT_URL`**, **`OLLAMA_BASE_URL`**, **`OLLAMA_EMBED`**, опционально **`GRAPH_RAG_FUSION_QDRANT_COLLECTION`** (см. **`skills/graph-rag/MCP.md`**); `pip install -r skills/graph-rag/requirements-mcp.txt`.
+   - **`rag-code`** (опционально, только если нужен отдельный бинарь RagCode): `command` на `~/.local/bin/rag-code-mcp`, `-config` на `config.yaml`, `env` Ollama/Qdrant.
    - **`lean-ctx`**: `command` — `~/.cargo/bin/lean-ctx`.
    - **`mcp-on-demand`**: `npx -y @soflution/mcp-on-demand`.
 
 8. **Полный перезапуск Cursor** после правок `mcp.json`.
-9. **Проверка UI**: Settings → MCP — серверы **rag-code**, **lean-ctx**, **mcp-on-demand** без ошибок (статус «зелёный»).
+9. **Проверка UI**: Settings → MCP — серверы **graph-rag** (и при необходимости **rag-code**), **lean-ctx**, **mcp-on-demand** без ошибок (статус «зелёный»).
 
 Опционально по статье (не обязательно для минимального запуска):
 
 - `lean-ctx init --global` — хук в shell для автосжатия вывода терминала.
-- Правила в проекте: `.cursorrules`, `.cursor/rules/*.mdc` с этапами A/B (разведка rag-code → работа через lean-ctx), лимиты токенов.
+- Правила в проекте: `.cursor/rules/*.mdc` с этапами A/B (разведка **graph-rag** → работа через **lean-ctx**), лимиты токенов.
 
 ---
 
@@ -72,7 +73,7 @@
 |------------|------|
 | Бинарь RagCode (исходный) | `~/Downloads/rag-code-mcp-v1.1.21/rag-code-mcp` |
 | Конфиг RagCode | `~/Downloads/rag-code-mcp-v1.1.21/config.yaml` |
-| Симлинк для MCP | `~/.local/bin/rag-code-mcp` |
+| MCP Graph RAG (stdio) | `~/Desktop/skills/graph-rag/scripts/graph_rag_mcp_server.py` |
 | lean-ctx | `~/.cargo/bin/lean-ctx` |
 | Конфиг MCP Cursor | `~/.cursor/mcp.json` |
 
@@ -87,6 +88,19 @@
 ```json
 {
   "mcpServers": {
+    "graph-rag": {
+      "command": "python3",
+      "args": [
+        "/home/USER/Desktop/skills/graph-rag/scripts/graph_rag_mcp_server.py"
+      ],
+      "env": {
+        "GRAPH_RAG_WORKSPACE": "/home/USER/Desktop",
+        "PYTHONPATH": "/home/USER/Desktop/skills/graph-rag/scripts",
+        "QDRANT_URL": "http://127.0.0.1:6333",
+        "OLLAMA_BASE_URL": "http://127.0.0.1:11434",
+        "OLLAMA_EMBED": "nomic-embed-text"
+      }
+    },
     "rag-code": {
       "command": "/home/USER/.local/bin/rag-code-mcp",
       "args": [
@@ -118,18 +132,20 @@
 
 ## Проверка после установки
 
-- [ ] `docker ps` — контейнеры **ollama** и **qdrant** (ragcode-qdrant) в нужном состоянии.
-- [ ] `docker exec ollama ollama list` — есть **`nomic-embed-text`** и выбранная phi3-модель.
-- [ ] `rag-code-mcp -health -ollama-base-url http://127.0.0.1:11434 -qdrant-url http://127.0.0.1:6333`
-- [ ] Cursor: MCP без ошибок для **rag-code**, **lean-ctx**, **mcp-on-demand**.
-- [ ] Первый запрос к коду в IDE может триггерить индексацию — подождать.
+- [ ] Neo4j для Graph RAG запущен; файл **`graph-rag-infra/.env.neo4j`** на месте (`NEO4J_PASSWORD`).
+- [ ] `pip install -r ~/Desktop/skills/graph-rag/requirements-mcp.txt` и `python3 ~/Desktop/skills/graph-rag/scripts/graph_rag_mcp_server.py` не падает при импорте (проверка без долгого stdio).
+- [ ] (Если используете RagCode) `docker ps` — **ollama** и **qdrant**; `rag-code-mcp -health ...`
+- [ ] Cursor: MCP без ошибок для **graph-rag**, **lean-ctx**, **mcp-on-demand** (и **rag-code**, если включён).
+- [ ] Для RagCode: первый запрос к коду может триггерить индексацию — подождать.
 
 ---
 
-## Идея из статьи (две фазы)
+## Две фазы (обновлённая связка)
 
-1. **Этап A** — незнакомый код: семантический поиск через **rag-code** (через **mcp-on-demand** при желании).
-2. **Этап B** — известные пути: **lean-ctx** для чтения/поиска с экономией токенов.
+1. **Этап A** — **`graph-rag`**: граф (`graph_rag_retrieve`, сущности, multi-hop). Семантика по коду с графом — **`graph_rag_fused_code_search`**, если в `env` сервера заданы **Qdrant + Ollama** (см. **`skills/graph-rag/MCP.md`**). Отдельный **rag-code** — только при необходимости второго контура.
+2. **Этап B** — известные пути к файлам: **lean-ctx** для чтения/поиска с экономией токенов.
+
+**mcp-on-demand** по-прежнему служит ленивому подключению MCP; в его конфиге можно указать те же имена серверов (**graph-rag**, **lean-ctx**), что и в основном `mcp.json`.
 
 Официальная документация Cursor по MCP: https://cursor.com/docs/mcp  
 
